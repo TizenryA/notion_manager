@@ -11,9 +11,10 @@
   </p>
 
   <p>
+    <a href="#quick-start">Quick Start</a> •
     <a href="#core-capabilities">Core Capabilities</a> •
     <a href="#architecture">Architecture</a> •
-    <a href="#setup">Setup</a> •
+    <a href="#full-setup-reference">Full Setup</a> •
     <a href="#documentation">Documentation</a>
   </p>
 
@@ -29,11 +30,47 @@
   <img src="img/dashboard.png" alt="Dashboard" width="900">
 </p>
 
-**notion-manager** is a local Notion AI management tool. It extracts live Notion sessions through the bundled Chrome extension, builds a multi-account pool, refreshes quota and model state in the background, and exposes three practical entrypoints:
+**notion-manager** is a local Notion AI management tool. It builds a multi-account pool, refreshes quota and model state in the background, and exposes three entrypoints:
 
-- `Dashboard` at `/dashboard/`
-- `Reverse Proxy` for the full Notion AI web UI at `/ai`
-- `Anthropic Messages API` at `POST /v1/messages`
+- **Dashboard** at `/dashboard/` — manage accounts, view quota, toggle settings
+- **Reverse Proxy** at `/ai` — full Notion AI web UI with pooled accounts
+- **Anthropic Messages API** at `POST /v1/messages` — compatible with Claude Code, Cherry Studio, etc.
+
+## Quick Start
+
+> **Prerequisites:** Go 1.25+, at least one Notion account. No Chrome extension needed.
+
+```bash
+# 1. Clone & run (config auto-generated on first start)
+git clone https://github.com/SleepingBag945/notion-manager.git
+cd notion-manager
+go run ./cmd/notion-manager
+```
+
+On first run, the console prints your **admin password** and **API key** — save them.
+
+```bash
+# 2. Open the Dashboard
+http://localhost:8081/dashboard/
+```
+
+**Add your first account:**
+
+1. In Chrome, open `notion.so` → `F12` → **Application** → **Cookies** → copy `token_v2`
+2. In the Dashboard, click **「+ 添加账号」** → paste `token_v2` → done
+
+The account is auto-discovered and hot-loaded — no restart needed.
+
+```bash
+# 3. Use the API (Claude Code, Cherry Studio, curl, etc.)
+export ANTHROPIC_BASE_URL=http://localhost:8081
+export ANTHROPIC_API_KEY=<your-api-key>
+claude  # or any Anthropic-compatible client
+```
+
+Or download a pre-built binary from [Releases](https://github.com/SleepingBag945/notion-manager/releases) — no Go toolchain required.
+
+---
 
 ## Core Capabilities
 
@@ -50,6 +87,8 @@
 - Embedded React dashboard at `/dashboard/`
 - Password login with session cookies
 - View account status, plans, quota, discovered models, and refresh progress
+- Add accounts by pasting `token_v2` — auto-discovers user info and models
+- Delete accounts directly from account cards with confirmation
 - Toggle `enable_web_search`, `enable_workspace_search`, and `debug_logging`
 - Open the best available account or a specific account into the local proxy
 
@@ -115,6 +154,7 @@ claude  # start interactive session
 ```mermaid
 graph TD
     A[Chrome Extension] -->|extract account JSON| B[accounts/*.json]
+    A2[Dashboard] -->|add via token_v2| B
     B --> C[Account Pool]
     D[Dashboard /dashboard/] -->|session auth| E[Admin API]
     E --> C
@@ -127,79 +167,63 @@ graph TD
     K --> L[notion.so / msgstore]
 ```
 
-## Setup
+## Full Setup Reference
 
 ### Requirements
 
-- Go `1.25+`
-- Chrome or Chromium for the extension workflow
+- Go `1.25+` (or use a [pre-built binary](https://github.com/SleepingBag945/notion-manager/releases))
 - At least one usable Notion account
+- Chrome or Chromium (only needed for the extension workflow — the Dashboard method requires no extension)
 
-The repo already includes embedded dashboard assets, so `go run` is enough if you only want to run the service.
+The repo includes embedded dashboard assets, so `go run` is enough.
 
-### 1. Extract account configs
+### Adding accounts
 
-1. Open `chrome://extensions`
-2. Enable developer mode
-3. Load `chrome-extension/`
-4. Open a logged-in `https://www.notion.so/`
-5. Click the extension and extract the config
-6. Save the result into `accounts/<name>.json`
+**Dashboard (recommended)** — paste `token_v2` in the UI, as described in [Quick Start](#quick-start).
 
-Example:
+**Chrome extension** — extracts a full config including `full_cookie`:
 
-```text
-accounts/
-  alice.json
-  team-a.json
-  backup.json
-```
+1. `chrome://extensions` → enable developer mode → load `chrome-extension/`
+2. Open a logged-in `https://www.notion.so/`
+3. Click the extension → extract config → save to `accounts/<name>.json`
 
-### 2. Configure `config.yaml`
+### Configuration
 
-Copy the example config and edit as needed:
+On first run, `config.yaml` is auto-generated with a random API key and admin password. To customize:
 
 ```bash
 cp example.config.yaml config.yaml
 ```
 
-- `server.port` sets the listening port
-- `server.admin_password` can be set manually or left empty for auto-generation
+| Key | Notes |
+|-----|-------|
+| `server.port` | Listening port (default `8081`) |
+| `server.api_key` | Auto-generated if empty |
+| `server.admin_password` | Auto-generated if empty; plaintext is auto-hashed on startup |
 
-You can also skip this step entirely — the service will start with defaults and auto-generate `config.yaml` with a random API key and admin password.
-
-Important:
-
-- If `server.api_key` is empty, startup generates one and writes it back to `config.yaml`
-- If `server.admin_password` is empty, startup generates a random password, prints it to the console, hashes it, and writes it back — save the plaintext shown on first run
-- If `server.admin_password` is plaintext, startup replaces it with a salted SHA256 hash
-
-### 3. Run
+### Building from source
 
 ```bash
-go run ./cmd/notion-manager
+go run ./cmd/notion-manager        # run directly
+go build -o notion-manager.exe ./cmd/notion-manager  # compile binary
 ```
 
-If you change the dashboard source under `web/`, rebuild it with `npm run build` inside `web/`, then sync the output into `internal/web/dist/`.
-
-Examples below use port `3000` from `example.config.yaml`. If you start without a `config.yaml`, the default port is `8081`.
-
-### 4. Verify
+If you modify the dashboard frontend (`web/`):
 
 ```bash
-curl http://localhost:3000/health
+cd web && npm run build        # build frontend
+cp -r dist ../internal/web/    # copy to embed directory
+cd .. && go build -o notion-manager.exe ./cmd/notion-manager
 ```
 
-Open:
-
-```text
-http://localhost:3000/dashboard/
-```
-
-Basic API call:
+### Verify
 
 ```bash
-curl http://localhost:3000/v1/messages \
+curl http://localhost:8081/health
+```
+
+```bash
+curl http://localhost:8081/v1/messages \
   -H "Authorization: Bearer <api_key>" \
   -H "Content-Type: application/json" \
   -d '{

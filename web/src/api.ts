@@ -90,6 +90,44 @@ export function openBestProxy() {
   window.open('/proxy/start?best=true', '_blank')
 }
 
+// --- Account Management API ---
+
+export interface AddAccountResult {
+  status?: string
+  error?: string
+  filename?: string
+  account?: {
+    name: string
+    email: string
+    space: string
+    plan_type: string
+  }
+}
+
+export async function addAccount(tokenV2: string): Promise<AddAccountResult> {
+  const resp = await fetch('/admin/accounts/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ token_v2: tokenV2 }),
+  })
+  const data = await readJson<AddAccountResult>(resp, '添加账号接口返回了无效响应')
+  if (!resp.ok) return { error: data.error || `HTTP ${resp.status}` }
+  return data
+}
+
+export async function deleteAccount(email: string): Promise<{ status?: string; error?: string }> {
+  const resp = await fetch('/admin/accounts/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ email }),
+  })
+  const data = await readJson<{ status?: string; error?: string }>(resp, '删除账号接口返回了无效响应')
+  if (!resp.ok) return { error: data.error || `HTTP ${resp.status}` }
+  return data
+}
+
 // --- Settings API ---
 
 export interface SearchSettings {

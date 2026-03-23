@@ -11,9 +11,10 @@
   </p>
 
   <p>
+    <a href="#快速开始">快速开始</a> •
     <a href="#核心能力">核心能力</a> •
     <a href="#系统架构">系统架构</a> •
-    <a href="#安装与启动">安装与启动</a> •
+    <a href="#完整安装参考">完整安装</a> •
     <a href="#详细文档">详细文档</a>
   </p>
 
@@ -29,11 +30,47 @@
   <img src="img/dashboard.png" alt="Dashboard" width="900">
 </p>
 
-**notion-manager** 是一个本地运行的 Notion AI 管理工具。它通过自带的 Chrome 扩展提取 Notion 会话，构建多账号池，在后台自动刷新额度与模型状态，并对外提供三个入口：
+**notion-manager** 是一个本地运行的 Notion AI 管理工具。构建多账号池，后台自动刷新额度与模型，对外提供三个入口：
 
-- `Dashboard`：查看账号状态、刷新额度、切换搜索开关、打开指定账号代理
-- `Reverse Proxy`：在本地浏览器中直接使用完整的 Notion AI 页面
-- `Anthropic Messages API`：通过 `POST /v1/messages` 以标准协议调用 Notion AI
+- **Dashboard** `/dashboard/` — 管理账号、查看额度、切换设置
+- **Reverse Proxy** `/ai` — 本地使用完整 Notion AI 页面
+- **Anthropic Messages API** `POST /v1/messages` — 兼容 Claude Code、Cherry Studio 等
+
+## 快速开始
+
+> **前置要求：** Go 1.25+，至少一个 Notion 账号。无需 Chrome 扩展。
+
+```bash
+# 1. 克隆并启动（配置首次运行自动生成）
+git clone https://github.com/SleepingBag945/notion-manager.git
+cd notion-manager
+go run ./cmd/notion-manager
+```
+
+首次启动时控制台会打印 **管理密码** 和 **API Key** — 请务必保存。
+
+```bash
+# 2. 打开 Dashboard
+http://localhost:8081/dashboard/
+```
+
+**添加第一个账号：**
+
+1. 在 Chrome 打开已登录的 `notion.so` → `F12` → **Application** → **Cookies** → 复制 `token_v2`
+2. 在 Dashboard 点击 **「+ 添加账号」** → 粘贴 `token_v2` → 完成
+
+账号自动发现并热加载，无需重启。
+
+```bash
+# 3. 使用 API（Claude Code、Cherry Studio、curl 等）
+export ANTHROPIC_BASE_URL=http://localhost:8081
+export ANTHROPIC_API_KEY=<your-api-key>
+claude  # 或任何 Anthropic 兼容客户端
+```
+
+也可以从 [Releases](https://github.com/SleepingBag945/notion-manager/releases) 下载预编译二进制，无需 Go 工具链。
+
+---
 
 ## 核心能力
 
@@ -50,6 +87,8 @@
 - 内置 React Dashboard，入口为 `/dashboard/`
 - 支持密码登录、会话维持与登出
 - 查看账号详情、额度、计划类型、可用模型和刷新状态
+- 通过粘贴 `token_v2` 添加账号，自动发现用户信息与模型
+- 在账号卡片上直接删除账号，带确认提示
 - 可触发手动刷新，并在页面内切换 `enable_web_search`、`enable_workspace_search`、`debug_logging`
 - 可一键打开“最佳账号”代理，或指定某个邮箱对应的账号打开代理可实现原版对话。
 
@@ -126,6 +165,7 @@ claude  # 启动交互式会话
 ```mermaid
 graph TD
     A[Chrome 扩展] -->|提取账号 JSON| B[accounts/*.json]
+    A2[Dashboard] -->|通过 token_v2 添加| B
     B --> C[Account Pool]
     D[Dashboard /dashboard/] -->|会话登录| E[Admin API]
     E --> C
@@ -138,80 +178,63 @@ graph TD
     K --> L[notion.so / msgstore]
 ```
 
-## 安装与启动
+## 完整安装参考
 
 ### 前置要求
 
-- Go `1.25` 或更高版本
-- Chrome / Chromium，用于加载扩展并提取账号
+- Go `1.25+`（或使用 [Release 预编译二进制](https://github.com/SleepingBag945/notion-manager/releases)）
 - 至少一个可用的 Notion 账号
+- Chrome / Chromium（仅扩展方式需要 —— Dashboard 方式无需扩展）
 
-仓库已经包含内嵌好的 Dashboard 前端资源；如果你只是运行服务，不需要先编译前端。
+仓库已内嵌 Dashboard 前端资源，直接 `go run` 即可。
 
-### 1. 提取账号配置
+### 添加账号
 
-1. 打开 Chrome 扩展管理页：`chrome://extensions`
-2. 开启“开发者模式”
-3. 选择“加载已解压的扩展程序”，指向仓库内的 `chrome-extension/`
-4. 打开任意已登录的 `https://www.notion.so/`
-5. 点击扩展中的“提取配置”
-6. 将结果保存到 `accounts/<你的名字>.json`
+**Dashboard（推荐）** — 在页面中粘贴 `token_v2`，详见[快速开始](#快速开始)。账号卡片底部的垃圾桶图标可删除账号。
 
-目录示例：
+**Chrome 扩展** — 提取包含 `full_cookie` 的完整配置：
 
-```text
-accounts/
-  alice.json
-  team-a.json
-  backup.json
-```
+1. `chrome://extensions` → 开启开发者模式 → 加载 `chrome-extension/`
+2. 打开已登录的 `https://www.notion.so/`
+3. 点击扩展 → 提取配置 → 保存到 `accounts/<名字>.json`
 
-### 2. 配置 `config.yaml`
+### 配置
 
-复制示例配置并按需修改：
+首次运行时自动生成 `config.yaml`（包含随机 API Key 和管理密码）。自定义配置：
 
 ```bash
 cp example.config.yaml config.yaml
 ```
 
-- `server.port` 决定服务监听端口
-- `server.admin_password` 可手动设置，也可留空由程序自动生成
+| 配置项 | 说明 |
+|--------|------|
+| `server.port` | 监听端口（默认 `8081`） |
+| `server.api_key` | 留空则自动生成 |
+| `server.admin_password` | 留空则自动生成；明文密码启动时自动哈希 |
 
-也可以跳过这一步 —— 服务会以默认值启动，自动生成 `config.yaml`（包含随机 API Key 和管理密码）。
-
-注意：
-
-- 如果 `server.api_key` 为空，启动时会自动生成并回写到 `config.yaml`
-- 如果 `server.admin_password` 为空，启动时会自动生成随机密码并打印到控制台，哈希后写回 —— 请务必保存首次启动时显示的明文密码
-- 如果 `server.admin_password` 是明文，启动时会自动替换为带盐的 SHA256 哈希
-
-### 3. 启动服务
-
-推荐直接运行 Go 入口：
+### 从源码构建
 
 ```bash
-go run ./cmd/notion-manager
+go run ./cmd/notion-manager        # 直接运行
+go build -o notion-manager.exe ./cmd/notion-manager  # 编译二进制
 ```
 
-如果你修改了 `web/` 前端源码，请在 `web/` 目录执行 `npm run build`，再把产物同步到 `internal/web/dist/`。
-
-### 4. 启动后验证
-
-下面示例使用 `example.config.yaml` 中的端口 `3000`。如果没有 `config.yaml`，默认端口为 `8081`。
+如果修改了前端源码（`web/`）：
 
 ```bash
-# 健康检查，无需认证
-curl http://localhost:3000/health
+cd web && npm run build        # 构建前端
+cp -r dist ../internal/web/    # 复制到 embed 目录
+cd .. && go build -o notion-manager.exe ./cmd/notion-manager
+```
+
+### 验证
+
+```bash
+curl http://localhost:8081/health
 ```
 
 ```bash
-# 打开 Dashboard
-http://localhost:3000/dashboard/
-```
-
-```bash
-# 通过 Anthropic Messages API 调用
-curl http://localhost:3000/v1/messages \
+curl http://localhost:8081/v1/messages \
   -H "Authorization: Bearer <api_key>" \
   -H "Content-Type: application/json" \
   -d '{

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import type { DashboardData, AccountInfo, RefreshStatus } from './types'
-import { fetchDashboardData, openProxy, openBestProxy, checkAuth, login, logout, triggerRefresh, fetchSettings, updateSettings } from './api'
+import { fetchDashboardData, openProxy, openBestProxy, checkAuth, login, logout, triggerRefresh, fetchSettings, updateSettings, addAccount, deleteAccount } from './api'
 import type { SearchSettings } from './api'
 import { fmt, getQuotaStatusByUsage, getQuotaPct, avatarColor, avatarLetter, formatCheckedAt, formatTimestampMs } from './utils'
 
@@ -40,6 +40,115 @@ const IconSettings = () => (
     <circle cx="12" cy="12" r="3" />
   </svg>
 )
+
+const IconPlus = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+  </svg>
+)
+const IconTrash = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+  </svg>
+)
+
+// --- Add Account Modal ---
+
+function AddAccountModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const [token, setToken] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<{ name: string; email: string; space: string; plan_type: string } | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const trimmed = token.trim()
+    if (!trimmed) return
+    setLoading(true)
+    setError('')
+    setResult(null)
+    try {
+      const res = await addAccount(trimmed)
+      if (res.error) {
+        setError(res.error)
+      } else if (res.account) {
+        setResult(res.account)
+        setTimeout(() => {
+          onSuccess()
+          onClose()
+        }, 1500)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '请求失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-lg bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-[16px] font-semibold">添加 Notion 账号</h2>
+          <button onClick={onClose} className="text-text-muted hover:text-white bg-transparent border-none cursor-pointer text-lg px-1">×</button>
+        </div>
+
+        <div className="text-[12px] text-text-secondary mb-4 space-y-1.5">
+          <p>粘贴你的 <code className="bg-white/[.08] px-1 py-0.5 rounded text-[11px]">token_v2</code> cookie，系统会自动获取账号信息。</p>
+          <p className="text-text-muted">获取方式：打开 <code className="bg-white/[.08] px-1 py-0.5 rounded text-[11px]">notion.so</code> → F12 → Application → Cookies → 复制 <code className="bg-white/[.08] px-1 py-0.5 rounded text-[11px]">token_v2</code> 的值</p>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <textarea
+            ref={inputRef}
+            value={token}
+            onChange={e => setToken(e.target.value)}
+            placeholder="粘贴 token_v2 值..."
+            rows={3}
+            className="w-full py-2.5 px-3 bg-transparent border border-white/10 rounded-lg text-[13px] text-text-primary outline-none focus:border-white/30 focus:ring-1 focus:ring-white/10 transition-all placeholder:text-white/25 resize-none font-mono"
+          />
+          {error && (
+            <div className="text-err text-[12px] mt-2 px-1">{error}</div>
+          )}
+          {result && (
+            <div className="mt-3 p-3 bg-[#0a3d0a]/50 border border-[#1b5e20]/50 rounded-lg text-[12px]">
+              <div className="text-[#4ade80] font-medium mb-1.5">添加成功</div>
+              <div className="space-y-0.5 text-text-secondary">
+                <div>用户: <span className="text-white">{result.name}</span> ({result.email})</div>
+                <div>空间: <span className="text-white">{result.space}</span> · {result.plan_type}</div>
+              </div>
+            </div>
+          )}
+          <div className="flex gap-2.5 mt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2.5 bg-transparent hover:bg-white/5 text-text-secondary rounded-lg text-[13px] font-medium cursor-pointer transition-colors border border-white/10"
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              disabled={loading || !token.trim() || !!result}
+              className="flex-1 py-2.5 bg-white hover:bg-white/90 text-black rounded-lg text-[13px] font-semibold cursor-pointer transition-colors border-none disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {loading ? '正在验证...' : '添加账号'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 // --- Login Page ---
 
@@ -304,8 +413,10 @@ function Badge({ children, variant }: { children: React.ReactNode; variant: 'pla
   )
 }
 
-function AccountCard({ account }: { account: AccountInfo }) {
+function AccountCard({ account, onDelete }: { account: AccountInfo; onDelete?: (email: string) => void }) {
   const [showModels, setShowModels] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const spaceQuota = getSpaceQuota(account)
   const userQuota = getUserQuota(account)
   const sameBasicQuota = isSameQuota(spaceQuota, userQuota)
@@ -400,7 +511,44 @@ function AccountCard({ account }: { account: AccountInfo }) {
           <IconClock />
           <span className="truncate">检查 {formatCheckedAt(account.checked_at)} · 最近 AI {formatTimestampMs(account.last_usage_at)}</span>
         </span>
-        <span className="text-[11px] text-text-secondary hover:text-white font-medium transition-colors">打开代理 →</span>
+        <div className="flex items-center gap-2">
+          {onDelete && (
+            confirmDelete ? (
+              <span className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                <span className="text-[10px] text-err">确认删除?</span>
+                <button
+                  disabled={deleting}
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    setDeleting(true)
+                    const res = await deleteAccount(account.email)
+                    setDeleting(false)
+                    if (res.error) { alert(res.error); setConfirmDelete(false); return }
+                    onDelete(account.email)
+                  }}
+                  className="text-[10px] px-1.5 py-0.5 bg-err/20 hover:bg-err/40 text-err rounded cursor-pointer border-none transition-colors disabled:opacity-50"
+                >
+                  {deleting ? '...' : '是'}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setConfirmDelete(false) }}
+                  className="text-[10px] px-1.5 py-0.5 bg-white/5 hover:bg-white/10 text-text-secondary rounded cursor-pointer border-none transition-colors"
+                >
+                  否
+                </button>
+              </span>
+            ) : (
+              <button
+                onClick={(e) => { e.stopPropagation(); setConfirmDelete(true) }}
+                className="text-text-muted hover:text-err transition-colors bg-transparent border-none cursor-pointer p-0.5 flex items-center"
+                title="删除账号"
+              >
+                <IconTrash />
+              </button>
+            )
+          )}
+          <span className="text-[11px] text-text-secondary hover:text-white font-medium transition-colors">打开代理 →</span>
+        </div>
       </div>
     </div>
   )
@@ -421,6 +569,7 @@ export default function App() {
   const [settings, setSettings] = useState<SearchSettings | null>(null)
   const [apiKeyRevealed, setApiKeyRevealed] = useState(false)
   const [copiedField, setCopiedField] = useState<'key' | 'base' | null>(null)
+  const [showAddModal, setShowAddModal] = useState(false)
   const copyToClipboard = (text: string, field: 'key' | 'base') => {
     navigator.clipboard.writeText(text)
     setCopiedField(field)
@@ -681,6 +830,12 @@ export default function App() {
           >
             <IconRefresh /> 刷新数据
           </button>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-bg-card hover:bg-bg-card-hover text-text-primary rounded-md text-[13px] font-medium cursor-pointer transition-colors border border-border"
+          >
+            <IconPlus /> 添加账号
+          </button>
           {refreshTime && (
             <span className="text-[11px] text-text-muted">
               更新于 {refreshTime}
@@ -787,7 +942,7 @@ export default function App() {
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-2.5 mb-4">
             {paged.map(acc => (
-              <AccountCard key={acc.email} account={acc} />
+              <AccountCard key={acc.email} account={acc} onDelete={() => loadData()} />
             ))}
           </div>
         )}
@@ -829,6 +984,7 @@ export default function App() {
           </div>
         )}
       </main>
+      {showAddModal && <AddAccountModal onClose={() => setShowAddModal(false)} onSuccess={loadData} />}
     </div>
   )
 }
