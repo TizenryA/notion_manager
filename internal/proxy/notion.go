@@ -2317,17 +2317,93 @@ func parseNDJSONStream(reader io.Reader, requestID string, cb StreamCallback, na
 			if err := json.Unmarshal([]byte(line), &toolEvt); err != nil {
 				continue
 			}
-			if toolEvt.ToolCallID == "" || (toolEvt.ToolType != "search" && toolEvt.ToolName != "search") {
+			if toolEvt.ToolCallID == "" {
 				continue
 			}
-			docs := collectSearchResultCitationDocs(toolEvt)
-			if len(docs) > 0 {
-				appendKnownCitationDocs(knownCitationDocs, docs)
-				appendKnownCitationURLs(knownCitationURLs, citationCandidateURLs(docs))
-				if len(toolCallSearchURLs[toolEvt.ToolCallID]) == 0 {
-					toolCallSearchURLs[toolEvt.ToolCallID] = citationCandidateURLs(docs)
+			// Detect search: legacy (toolType/toolName=="search") or new callFunction format
+			isSearch := toolEvt.ToolType == "search" || toolEvt.ToolName == "search"
+			if !isSearch {
+				_, isSearch = searchToolStates[toolEvt.ToolCallID]
+			}
+			if !isSearch && strings.Contains(toolEvt.Input.Function, "search") {
+				isSearch = true
+			}
+			if !isSearch {
+				continue
+			}
+
+			// Build/update search state from callFunction streaming events
+			state := searchToolStates[toolEvt.ToolCallID]
+			if state == nil {
+				state = &searchToolState{}
+				searchToolStates[toolEvt.ToolCallID] = state
+			}
+
+			// Extract query lines from callFunction input or cycleQueries
+			if len(state.queryLines) == 0 {
+				var ql []searchQueryLine
+				for _, q := range toolEvt.Input.Args.Queries {
+					question := strings.TrimSpace(q.Question)
+					if question != "" {
+						ql = append(ql, searchQueryLine{Label: "**Web Search**", Query: question})
+					}
 				}
-				emitDelta()
+				if len(ql) == 0 {
+					for _, cq := range toolEvt.Result.CycleQueries {
+						cq = strings.TrimSpace(cq)
+						if cq != "" {
+							ql = append(ql, searchQueryLine{Label: "**Web Search**", Query: cq})
+						}
+					}
+				}
+				if len(ql) > 0 {
+					state.queryLines = ql
+				}
+			}
+
+			// Emit search progress thinking on streaming events
+			if !state.started && len(state.queryLines) > 0 {
+				emitThinking(formatSearchQueryLines(state.queryLines))
+				emitThinking(formatSearchStatusLines("**Searching**", state.queryLines))
+				state.started = true
+			}
+
+			// On "applied" state: search is complete
+			if toolEvt.State == "applied" {
+				// Try legacy extractedResults first
+				docs := collectSearchResultCitationDocs(toolEvt)
+				// Also try parsing results from result.output JSON string (new format)
+				if len(docs) == 0 && toolEvt.Result.Output != "" {
+					docs = parseCallFunctionSearchOutput(toolEvt.Result.Output)
+				}
+				if len(docs) > 0 {
+					appendKnownCitationDocs(knownCitationDocs, docs)
+					appendKnownCitationURLs(knownCitationURLs, citationCandidateURLs(docs))
+					if len(toolCallSearchURLs[toolEvt.ToolCallID]) == 0 {
+						toolCallSearchURLs[toolEvt.ToolCallID] = citationCandidateURLs(docs)
+					}
+				}
+				// Emit search completion + results summary BEFORE emitDelta
+				// (emitDelta calls closeThinking, which would prevent further thinking)
+				if !state.completed && len(state.queryLines) > 0 {
+					emitThinking(formatSearchStatusLines("**Search Complete**", state.queryLines))
+					state.completed = true
+				}
+				if !seenSearchResultSummaries[toolEvt.ToolCallID] {
+					if len(toolEvt.Result.ExtractedResults) > 0 {
+						emitThinking(formatSearchResultsSummary(toolEvt.Result.ExtractedResults))
+						seenSearchResultSummaries[toolEvt.ToolCallID] = true
+					} else if len(docs) > 0 {
+						summary := formatCitationDocsSummary(docs)
+						if summary != "" {
+							emitThinking(summary)
+							seenSearchResultSummaries[toolEvt.ToolCallID] = true
+						}
+					}
+				}
+				if len(docs) > 0 {
+					emitDelta()
+				}
 			}
 
 		case "agent-search-extracted-results":
@@ -2372,7 +2448,6 @@ func parseNDJSONStream(reader io.Reader, requestID string, cb StreamCallback, na
 			if err := json.Unmarshal([]byte(line), &step); err != nil {
 				continue
 			}
-			// Iterate ALL value entries - model may have thinking + text + tool_use entries
 			for _, entry := range step.Value {
 				switch entry.Type {
 				case "thinking":
@@ -2401,19 +2476,32 @@ func parseNDJSONStream(reader io.Reader, requestID string, cb StreamCallback, na
 						emitDelta()
 					}
 				case "tool_use":
-					if entry.Name == "search" && entry.ID != "" {
-						state := searchToolStates[entry.ID]
-						if state == nil {
-							state = &searchToolState{}
-							searchToolStates[entry.ID] = state
+					// Detect search tool by name OR by input structure (handles
+					// Notion renaming the tool from "search" to "callFunction" etc.)
+					if entry.ID != "" {
+						isSearchEntry := entry.Name == "search"
+						if !isSearchEntry {
+							// Check if input contains search query structure
+							if _, already := searchToolStates[entry.ID]; already {
+								isSearchEntry = true
+							} else if ql := extractSearchToolQueryLinesFromEntry(entry); len(ql) > 0 {
+								isSearchEntry = true
+							}
 						}
-						if len(state.queryLines) == 0 {
-							state.queryLines = extractSearchToolQueryLinesFromEntry(entry)
-						}
-						if !state.started && len(state.queryLines) > 0 {
-							emitThinking(formatSearchQueryLines(state.queryLines))
-							emitThinking(formatSearchStatusLines("**Searching**", state.queryLines))
-							state.started = true
+						if isSearchEntry {
+							state := searchToolStates[entry.ID]
+							if state == nil {
+								state = &searchToolState{}
+								searchToolStates[entry.ID] = state
+							}
+							if len(state.queryLines) == 0 {
+								state.queryLines = extractSearchToolQueryLinesFromEntry(entry)
+							}
+							if !state.started && len(state.queryLines) > 0 {
+								emitThinking(formatSearchQueryLines(state.queryLines))
+								emitThinking(formatSearchStatusLines("**Searching**", state.queryLines))
+								state.started = true
+							}
 						}
 					}
 					if entry.Name != "" && entry.ID != "" && !seenNativeToolUseIDs[entry.ID] {
@@ -2856,15 +2944,81 @@ type searchToolResultEvent struct {
 	ToolCallID string `json:"toolCallId"`
 	ToolName   string `json:"toolName"`
 	ToolType   string `json:"toolType"`
-	Result     struct {
+	State      string `json:"state"` // "streaming" or "applied"
+	Input      struct {
+		Function string `json:"function"`
+		Args     struct {
+			Queries []struct {
+				Question string `json:"question"`
+				Keywords string `json:"keywords"`
+			} `json:"queries"`
+			IncludeWebResults bool `json:"includeWebResults"`
+		} `json:"args"`
+	} `json:"input"`
+	Result struct {
 		ExtractedResults  []extractedSearchResult `json:"extractedResults"`
 		StructuredContent struct {
 			Results []structuredSearchResult `json:"results"`
 		} `json:"structuredContent"`
+		CycleQueries []string `json:"cycleQueries"`
+		Output       string   `json:"output"` // JSON string with search results
 	} `json:"result"`
 	AdditionalResultForRender struct {
 		WebResults [][]renderedSearchResult `json:"webResults"`
 	} `json:"additionalResultForRender"`
+}
+
+// parseCallFunctionSearchOutput parses the JSON string in result.output from
+// callFunction search results and returns CitationCandidate docs.
+func parseCallFunctionSearchOutput(outputJSON string) []CitationCandidate {
+	var parsed struct {
+		Results []struct {
+			ID    string `json:"id"`
+			Type  string `json:"type"`
+			Title string `json:"title"`
+			URL   string `json:"url"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(outputJSON), &parsed); err != nil {
+		return nil
+	}
+	var docs []CitationCandidate
+	seen := make(map[string]bool)
+	for _, r := range parsed.Results {
+		u := r.URL
+		if u == "" {
+			u = extractSearchResultURL(r.ID)
+		}
+		if u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		docs = append(docs, CitationCandidate{
+			URL:   u,
+			Title: r.Title,
+		})
+	}
+	return docs
+}
+
+// formatCitationDocsSummary formats a summary of citation docs for thinking output.
+func formatCitationDocsSummary(docs []CitationCandidate) string {
+	if len(docs) == 0 {
+		return ""
+	}
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("**Found %d Results**\n", len(docs)))
+	for i, doc := range docs {
+		title := strings.TrimSpace(doc.Title)
+		if title == "" {
+			title = doc.URL
+		}
+		if title == "" {
+			continue
+		}
+		out.WriteString(fmt.Sprintf("%d. %s\n", i+1, title))
+	}
+	return out.String()
 }
 
 func formatSearchResultsSummary(results []extractedSearchResult) string {
