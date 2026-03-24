@@ -93,8 +93,9 @@ func friendlyModelNameByInternalID(id string) string {
 		return ""
 	}
 
+	snap := SnapshotModelMap()
 	candidates := make([]string, 0, 1)
-	for friendly, internalID := range DefaultModelMap {
+	for friendly, internalID := range snap {
 		if internalID == trimmed {
 			candidates = append(candidates, friendly)
 		}
@@ -161,7 +162,7 @@ func HandleAdminModels(pool *AccountPool, auth *DashboardAuth) http.HandlerFunc 
 			return
 		}
 		resp := map[string]interface{}{
-			"model_map":        DefaultModelMap,
+			"model_map":        SnapshotModelMap(),
 			"available_models": pool.AllModels(),
 		}
 		json.NewEncoder(w).Encode(resp)

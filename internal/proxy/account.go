@@ -286,7 +286,7 @@ func (p *AccountPool) AllModels() []ModelEntry {
 	}
 	if len(models) == 0 {
 		// Return default models if none loaded
-		for name, id := range DefaultModelMap {
+		for name, id := range SnapshotModelMap() {
 			models = append(models, ModelEntry{Name: name, ID: id})
 		}
 	}
@@ -425,17 +425,16 @@ func (p *AccountPool) RefreshAll(accountsDir string) {
 
 	if modelsUpdated {
 		// Update DefaultModelMap from fetched models
-		p.mu.Lock()
+		p.mu.RLock()
 		for _, acc := range p.accounts {
 			for _, m := range acc.Models {
-				// Build reverse mapping: display name → internal ID
 				normalizedName := normalizeModelName(m.Name)
 				if normalizedName != "" {
-					DefaultModelMap[normalizedName] = m.ID
+					SetModelID(normalizedName, m.ID)
 				}
 			}
 		}
-		p.mu.Unlock()
+		p.mu.RUnlock()
 	}
 
 	// 3. Persist to disk

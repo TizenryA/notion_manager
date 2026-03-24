@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -54,11 +55,46 @@ var DefaultModelMap = map[string]string{
 	"minimax-m2.5":     "fireworks-minimax-m2.5",
 }
 
+var modelMapMu sync.RWMutex
+
+// GetModelID returns the Notion internal ID for a friendly model name (thread-safe).
+func GetModelID(name string) (string, bool) {
+	modelMapMu.RLock()
+	defer modelMapMu.RUnlock()
+	id, ok := DefaultModelMap[name]
+	return id, ok
+}
+
+// SetModelID sets a single entry in DefaultModelMap (thread-safe).
+func SetModelID(name, id string) {
+	modelMapMu.Lock()
+	defer modelMapMu.Unlock()
+	DefaultModelMap[name] = id
+}
+
+// ReplaceModelMap atomically replaces the entire DefaultModelMap (thread-safe).
+func ReplaceModelMap(m map[string]string) {
+	modelMapMu.Lock()
+	defer modelMapMu.Unlock()
+	DefaultModelMap = m
+}
+
+// SnapshotModelMap returns a shallow copy of DefaultModelMap (thread-safe).
+func SnapshotModelMap() map[string]string {
+	modelMapMu.RLock()
+	defer modelMapMu.RUnlock()
+	copy := make(map[string]string, len(DefaultModelMap))
+	for k, v := range DefaultModelMap {
+		copy[k] = v
+	}
+	return copy
+}
+
 // ApplyConfig applies loaded configuration to package-level variables.
 func ApplyConfig(cfg *Config) {
 	NotionAPIBase = cfg.Proxy.NotionAPIBase
 	DefaultClientVersion = cfg.Proxy.ClientVersion
-	DefaultModelMap = cfg.ModelMap
+	ReplaceModelMap(cfg.ModelMap)
 	SetDebugLoggingEnabled(cfg.Server.DebugLogging)
 	SetAPILogInputEnabled(cfg.Server.APILogInput)
 	SetAPILogOutputEnabled(cfg.Server.APILogOutput)
@@ -80,24 +116,25 @@ var anthropicModelAliases = map[string]string{
 
 // ResolveModel maps OpenAI/Anthropic model name → Notion internal model name
 func ResolveModel(model string) string {
+	snap := SnapshotModelMap()
 	// Direct match
-	if id, ok := DefaultModelMap[model]; ok {
+	if id, ok := snap[model]; ok {
 		return id
 	}
 	// Try Anthropic alias (e.g. "claude-opus-4-6" → "opus-4.6")
 	if alias, ok := anthropicModelAliases[model]; ok {
-		if id, ok2 := DefaultModelMap[alias]; ok2 {
+		if id, ok2 := snap[alias]; ok2 {
 			return id
 		}
 	}
 	// Strip date suffix (e.g. "claude-opus-4-6-20250929" → "claude-opus-4-6")
 	if idx := strings.LastIndex(model, "-2"); idx > 0 && len(model)-idx >= 9 {
 		stripped := model[:idx]
-		if id, ok := DefaultModelMap[stripped]; ok {
+		if id, ok := snap[stripped]; ok {
 			return id
 		}
 		if alias, ok := anthropicModelAliases[stripped]; ok {
-			if id, ok2 := DefaultModelMap[alias]; ok2 {
+			if id, ok2 := snap[alias]; ok2 {
 				return id
 			}
 		}
@@ -106,17 +143,17 @@ func ResolveModel(model string) string {
 	lower := strings.ToLower(model)
 	switch {
 	case strings.Contains(lower, "opus"):
-		if id, ok := DefaultModelMap["opus-4.6"]; ok {
+		if id, ok := snap["opus-4.6"]; ok {
 			log.Printf("[model] fuzzy fallback %q → opus-4.6", model)
 			return id
 		}
 	case strings.Contains(lower, "sonnet"):
-		if id, ok := DefaultModelMap["sonnet-4.6"]; ok {
+		if id, ok := snap["sonnet-4.6"]; ok {
 			log.Printf("[model] fuzzy fallback %q → sonnet-4.6", model)
 			return id
 		}
 	case strings.Contains(lower, "haiku"):
-		if id, ok := DefaultModelMap["haiku-4.5"]; ok {
+		if id, ok := snap["haiku-4.5"]; ok {
 			log.Printf("[model] fuzzy fallback %q → haiku-4.5", model)
 			return id
 		}
